@@ -59,7 +59,7 @@ function App(){
  function updatePdfBlock(block,replacement){
   const edits=result.edits.filter(e=>e.id!==block.id);
   if(replacement!==block.text)edits.push({id:block.id,original:block.text,replacement,reason:'Edited during review.'});
-  setResult({...result,edits,text:result.originalTemplate.blocks.map(b=>edits.find(e=>e.id===b.id)?.replacement??b.text).join('\n\n'),changes:edits.map(e=>({original:e.original,replacement:e.replacement,source:'Original PDF · '+e.id,reason:e.reason}))});setPdfPreview(null);
+  setResult({...result,edits,text:result.originalTemplate.blocks.map((b,i)=>(i?(b.separator??'\n\n'):'')+(edits.find(e=>e.id===b.id)?.replacement??b.text)).join(''),changes:edits.map(e=>({original:e.original,replacement:e.replacement,source:'Original PDF · '+e.id,reason:e.reason}))});setPdfPreview(null);
  }
  async function exportOriginal(download=false){
   const output=await api('/api/pdf/export',{method:'POST',body:JSON.stringify({path:result.originalTemplate.path,edits:result.edits,preview:!download})});

@@ -76,7 +76,7 @@ app.post('/api/tailor',async(req,res)=>{
   const fitted=await processPdf(pdfBuffer,'export',draft.edits);
   const accepted=new Set(fitted.applied);draft.templateWarnings=fitted.rejected;
   draft.edits=draft.edits.filter(e=>accepted.has(e.id));
-  draft.text=info.blocks.map(b=>draft.edits.find(e=>e.id===b.id)?.replacement||b.text).join('\n\n');
+  draft.text=info.blocks.map((b,i)=>(i?(b.separator??'\n\n'):'')+(draft.edits.find(e=>e.id===b.id)?.replacement||b.text)).join('');
   draft.changes=draft.edits.map(e=>({original:e.original,replacement:e.replacement,source:'Original PDF · '+e.id,reason:e.reason}));
   draft.originalTemplate={path:originalPath,blocks:info.blocks,pages:info.pages};
  }

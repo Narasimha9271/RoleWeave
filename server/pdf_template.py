@@ -15,13 +15,33 @@ def font_for(doc, page, span):
             try:
                 data=doc.extract_font(entry[0])[3]
                 if data:
-                    return {'font':fitz.Font(fontbuffer=data),'buffer':data,'alias':'RG'+str(entry[0])}
+                    return {'font':fitz.Font(fontbuffer=data),'buffer':data,'alias':'RG'+str(entry[0]),'simple':entry[2]=='Type1'}
             except Exception:
                 pass
     return None
 
+def text_runs(lines):
+    # LaTeX can emit each word / space as a separate span. Join only adjacent
+    # spans of the same style on the same baseline before protecting emphasis.
+    runs=[]
+    for line in lines:
+        groups=[]
+        for span in line['spans']:
+            previous=groups[-1][-1] if groups else None
+            same=previous and (span['font'],round(span['size'],2),span['color'])==(previous['font'],round(previous['size'],2),previous['color'])
+            adjacent=previous and abs(span['origin'][1]-previous['origin'][1])<0.1 and -0.1<=span['bbox'][0]-previous['bbox'][2]<=max(2,span['size'])
+            if same and adjacent: groups[-1].append(span)
+            else: groups.append([span])
+        for group in groups:
+            visible=[s for s in group if s.get('text','').strip()]
+            if not visible: continue
+            first=visible[0]; rect=fitz.Rect(first['bbox'])
+            for span in visible[1:]: rect|=fitz.Rect(span['bbox'])
+            runs.append({**first,'text':''.join(s.get('text','') for s in group).strip(),'bbox':tuple(rect),'members':visible})
+    return runs
+
 def collect(doc):
-    result=[]; internals={}
+    result=[]; internals={}; fonts={}
     signed=doc.get_sigflags()>0
     pending_redactions=any(a.type[0]==fitz.PDF_ANNOT_REDACT for p in doc for a in p.annots())
     for pi,page in enumerate(doc):
@@ -36,34 +56,74 @@ def collect(doc):
             text='\n'.join(''.join(s.get('text','') for s in line['spans']).rstrip() for line in lines).strip()
             ident=f'p{pi+1}-b{bi}'; bbox=fitz.Rect(block['bbox']); reason=''; first=spans[0]
             styles={(s['font'],round(s['size'],1),s['color']) for s in spans}
-            font=font_for(doc,page,first)
             if signed: reason='Signed PDFs cannot be edited in template mode.'
             elif pending_redactions: reason='PDFs with pending redactions are protected.'
             elif any(j!=bi and other.get('type')==0 and bbox.intersects(fitz.Rect(other['bbox'])) for j,other in enumerate(page_blocks)): reason='Overlapping text blocks are protected.'
             elif page.rotation: reason='Rotated text/page is protected.'
             elif any(tuple(line.get('dir',(1,0)))!=(1.0,0.0) for line in lines): reason='Rotated text is protected.'
-            elif len(styles)>1: reason='Mixed formatting is protected to keep the template intact.'
-            elif len(text)<35 or first['size']>=15: reason='Heading or short label is kept unchanged.'
+            elif len(text)<35 or max(s['size'] for s in spans)>=15: reason='Heading or short label is kept unchanged.'
             elif re.search(r'@|https?://|www\.',text): reason='Contact details and links are kept unchanged.'
             elif any(bbox.intersects(r) for r in links+widgets): reason='Linked text or form fields are protected.'
-            elif not font: reason='This font cannot be safely reused.'
-            elif max(s['origin'][0] for s in [line['spans'][0] for line in lines])-min(s['origin'][0] for s in [line['spans'][0] for line in lines])>3: reason='Mixed indentation is protected.'
-            record={'id':ident,'page':pi+1,'text':text,'editable':not bool(reason),'reason':reason,'font':first['font'],'fontSize':round(first['size'],2),'maxChars':len(text)}
-            result.append(record)
-            internals[ident]={'page':pi,'bbox':bbox,'lines':lines,'span':first,'font':font,'record':record}
+            # Split only prose bullets and labelled skills, not employer/date/header rows.
+            segmented=len(styles)>1 and not reason and bool(re.match(r'^[•‣▪–-]\s|^[^:\n]{2,40}:',text))
+            candidates=[]
+            if segmented:
+                cursor=0
+                for si,span in enumerate(text_runs(lines)):
+                    part=span['text'].strip(); offset=text.find(part,cursor)
+                    if offset<0: raise ValueError('PDF text segmentation failed.')
+                    separator=('\n\n' if si==0 else '')+text[cursor:offset]
+                    cursor=offset+len(part)
+                    candidates.append((ident+f'-s{si}',part,fitz.Rect(span['bbox']),[{'spans':[span]}],span,separator))
+            else:
+                if not reason and len(styles)>1: reason='Mixed headings, dates and labels are kept unchanged.'
+                candidates=[(ident,text,bbox,lines,first,'\n\n')]
+            for key,part,rect,part_lines,span,separator in candidates:
+                protected=reason
+                font_key=(pi,span['font'])
+                if font_key not in fonts: fonts[font_key]=font_for(doc,page,span)
+                font=fonts[font_key]
+                if not protected:
+                    if len(part)<35: protected='Short labels, bullet markers and emphasis are kept unchanged.'
+                    elif not font: protected='This font cannot be safely reused.'
+                    elif segmented and any(all(other is not member for member in span['members']) and rect.intersects(fitz.Rect(other['bbox'])) for other in spans): protected='Overlapping text segments are protected.'
+                    elif max(line['spans'][0]['origin'][0] for line in part_lines)-min(line['spans'][0]['origin'][0] for line in part_lines)>3: protected='Mixed indentation is protected.'
+                record={'id':key,'page':pi+1,'text':part,'editable':not bool(protected),'reason':protected,'font':span['font'],'fontSize':round(span['size'],2),'maxChars':len(part),'separator':separator,'segmented':segmented,'asciiOnly':bool(font and font.get('simple'))}
+                result.append(record)
+                internals[key]={'page':pi,'bbox':rect,'lines':part_lines,'span':span,'font':font,'record':record}
     return result,internals
+
+def joined_text(blocks):
+    return ''.join(('' if i==0 else b.get('separator','\n\n'))+b['text'] for i,b in enumerate(blocks))
+
+def text_width(text, font, size):
+    if font.has_glyph(32): return font.text_length(text,fontsize=size)
+    # Some embedded TeX subsets omit a space glyph and position words with TJ.
+    # A literal space would be written as .notdef / NUL by a new font resource.
+    return sum(font.text_length(word,fontsize=size) for word in text.split(' '))+text.count(' ')*size/3
+
+def insert_line(page, origin, text, font, size, color):
+    if font['font'].has_glyph(32):
+        page.insert_text(origin,text,fontname=font['alias'],fontsize=size,color=color,overlay=True)
+        return
+    x,y=origin
+    for word in text.split(' '):
+        if word: page.insert_text((x,y),word,fontname=font['alias'],fontsize=size,color=color,overlay=True)
+        x+=font['font'].text_length(word,fontsize=size)+size/3
 
 def plan_text(text, item):
     font=item['font']['font']; size=item['span']['size']; width=item['bbox'].width
+    if item['font'].get('simple') and any(ord(c)>127 for c in text if not c.isspace()):
+        return None,'Use plain ASCII punctuation and letters for this embedded Type 1 font.'
     if any(not font.has_glyph(ord(c)) for c in text if not c.isspace()):
         return None,'The original font lacks characters needed by the replacement.'
     rows=[]
     for paragraph in text.split('\n'):
         current=''
         for word in paragraph.split():
-            if font.text_length(word,fontsize=size)>width+0.2: return None,'A word is too wide for the original text block.'
+            if text_width(word,font,size)>width+0.2: return None,'A word is too wide for the original text block.'
             proposed=(current+' '+word).strip()
-            if current and font.text_length(proposed,fontsize=size)>width+0.2:
+            if current and text_width(proposed,font,size)>width+0.2:
                 rows.append(current);current=word
             else: current=proposed
         if current: rows.append(current)
@@ -79,7 +139,7 @@ def main():
     if len(doc)>10: raise ValueError('Template mode supports up to 10 pages.')
     blocks,items=collect(doc)
     if req.get('mode','inspect')=='inspect':
-        print(json.dumps({'blocks':blocks,'pages':len(doc),'supported':any(x['editable'] for x in blocks),'text':'\n\n'.join(x['text'] for x in blocks)},ensure_ascii=False));return
+        print(json.dumps({'blocks':blocks,'pages':len(doc),'supported':any(x['editable'] for x in blocks),'text':joined_text(blocks)},ensure_ascii=False));return
     edits=req.get('edits',[])
     if len(edits)>250: raise ValueError('Too many edits.')
     seen=set(); planned=[]; rejected=[]
@@ -105,10 +165,10 @@ def main():
         for _,item,rows,_ in planned:
             if item['page']!=pi:continue
             font=item['font']; alias=font['alias']
-            if font['buffer']: page.insert_font(fontname=alias,fontbuffer=font['buffer'])
+            if font['buffer']: page.insert_font(fontname=alias,fontbuffer=font['buffer'],set_simple=font.get('simple',False))
             color=fitz.sRGB_to_pdf(item['span']['color'])
             for line,old in zip(rows,item['lines']):
-                page.insert_text(old['spans'][0]['origin'],line,fontname=alias,fontsize=item['span']['size'],color=color,overlay=True)
+                insert_line(page,old['spans'][0]['origin'],line,font,item['span']['size'],color)
     output=doc.tobytes(garbage=4,deflate=True)
     result={'pdfBase64':base64.b64encode(output).decode(),'applied':[x[0] for x in planned],'rejected':rejected,'pages':len(doc)}
     if req.get('preview'):
