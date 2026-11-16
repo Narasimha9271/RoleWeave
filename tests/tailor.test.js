@@ -1,0 +1,6 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {hasSkill,analyze,extractiveTailor} from '../server/tailor.js';
+test('skill boundaries do not confuse Java and JavaScript or Go and Google',()=>{assert.equal(hasSkill('JavaScript','Java'),false);assert.equal(hasSkill('Google','Go'),false);assert.equal(hasSkill('C++ and Node.js','C++'),true)});
+test('unsupported skills stay out of the draft',()=>{const original='Alex Morgan\nSoftware Engineer building React applications.';const result=extractiveTailor(original,'React, Kubernetes, Docker required',[]);assert.equal(result.text,original);assert.deepEqual(result.gaps,['Docker','Kubernetes']);assert.ok(result.suggestions.length===2)});
+test('projects only appended when relevant; original preserved',()=>{const original='A software engineer with production experience.';const repos=[{name:'UI',description:'React dashboard',language:'JavaScript',url:'https://github.com/a/ui'},{name:'CLI',description:'Python script',language:'Python',url:'https://github.com/a/cli'}];const result=extractiveTailor(original,'React frontend developer',repos);assert.ok(result.text.startsWith(original));assert.ok(result.text.includes('UI'));assert.ok(!result.text.includes('CLI'));assert.equal(result.changes[0].source,repos[0].url)});

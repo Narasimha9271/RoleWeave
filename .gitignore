@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.env
+*.log
+test-results/
+
+.python-packages/
+data/
+__pycache__/
+
+# Local configuration and generated artifacts
+.env.*
+!.env.example
+.venv/
+venv/
+coverage/
+playwright-report/
+*.pyc
+.DS_Store
+Thumbs.db
