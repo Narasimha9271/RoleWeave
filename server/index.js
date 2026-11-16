@@ -16,6 +16,10 @@ const app=express();
 const cloud=process.env.SUPABASE_URL&&process.env.SUPABASE_ANON_KEY?createClient(process.env.SUPABASE_URL,process.env.SUPABASE_ANON_KEY):null;
 if(process.env.NODE_ENV==='production'&&!cloud) throw new Error('Production requires Supabase authentication configuration.');
 app.disable('x-powered-by');
+const proxyHops=Number(process.env.TRUST_PROXY_HOPS||0);
+if(!Number.isInteger(proxyHops)||proxyHops<0||proxyHops>5)throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 5.');
+app.set('trust proxy',proxyHops);
+app.get('/healthz',(req,res)=>res.status(200).json({status:'ok'}));
 app.use(express.json({limit:'1mb'}));
 app.use('/api',rateLimit({windowMs:60000,limit:30,standardHeaders:'draft-8',legacyHeaders:false}));
 app.get('/api/config',async(req,res)=>{

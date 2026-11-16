@@ -98,3 +98,14 @@ Checks: `npm test`, `npm run build`, and `python tests/test_pdf_template.py` (th
 Generate now checks the connected public GitHub username against the current JD before rewriting. GitHub login supplies a username when available; otherwise the app prompts to connect a public username or skip projects. The username is remembered in account metadata (local browser storage in preview mode). Matching uses descriptions, primary languages and topics from up to 100 recent public, non-fork repositories, plus up to eight candidate README excerpts. It is a bounded evidence match, not a source-code audit. Public API requests are cached for five minutes and rate-limit failures allow retry/skip.
 
 No project is selected automatically. The user selects matches, confirms personal contribution, and clicks Import & rewrite. Cancel makes no change to the current draft. Continuing without GitHub sends no projects, including previously selected ones. Every new generation rechecks the current JD; only approved project evidence goes to the AI provider, and the saved result records approvedProjects. Original PDF mode keeps its fixed-layout limits; the review offers an explicit switch to a built-in template for adding project sections.
+
+## Deploy to Render
+The included Dockerfile packages the Node API, React build and Python PDF engine together. Create a free Docker web service from this repository, or use the included Render Blueprint. The region defaults to Singapore and the health check is /healthz.
+
+1. In Render, set SUPABASE_URL and SUPABASE_ANON_KEY to your project's public configuration. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to the same values before the Docker build. The build rejects missing client configuration.
+2. Set AI_PROVIDER=groq, GROQ_API_KEY and GROQ_MODEL=openai/gpt-oss-120b. Only the two VITE variables are declared as Docker build arguments; AI credentials remain server configuration. Never commit .env or upload the local tools/config directory.
+3. Set TRUST_PROXY_HOPS=1 for Render's proxy. The container listens on 0.0.0.0 and uses Render's PORT. Direct local execution defaults to no trusted proxies.
+4. Deploy main. In Supabase Authentication > URL Configuration, set Site URL to the service's HTTPS origin and add that origin with a trailing slash to Redirect URLs. Keep local redirects if you still develop locally. The GitHub OAuth provider callback remains the Supabase callback URL.
+5. Verify /healthz returns 200, /api/config reports cloud and AI enabled, and /api/tailor returns 401 without a session. Sign in through GitHub, save a test application, and confirm it reloads after signing out and back in.
+
+Supabase stores history and uploaded original PDFs; no persistent Render disk is required. The free web service can sleep when idle, so the first request may be slow. Changing VITE variables requires a rebuild. This configuration is for a single-service MVP; the public-launch limitations above still apply.

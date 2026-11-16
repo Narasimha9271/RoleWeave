@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+node_modules
+dist
+.python-packages
+.deploy-tools
+data
+.venv
+venv
+__pycache__
+*.pyc
+*.log
+test-results
+playwright-report
+coverage
+tests
