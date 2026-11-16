@@ -59,9 +59,9 @@ app.post('/api/parse',upload.single('file'),async(req,res)=>{
 const repoSchema=z.object({name:z.string().max(200),description:z.string().max(2000),language:z.string().max(100),url:z.string().url().max(500),readme:z.string().max(12000).optional(),topics:z.array(z.string().max(100)).max(30).optional()});
 app.get('/api/github/:username',async(req,res)=>res.json(await listRepositories(req.params.username)));
 app.post('/api/github/match',async(req,res)=>{
- const input=z.object({username:z.string().trim().min(1).max(39),jd:z.string().min(30).max(20000)}).safeParse(req.body);
+ const input=z.object({username:z.string().trim().min(1).max(39),jd:z.string().min(30).max(20000),role:z.string().trim().max(200).default('')}).safeParse(req.body);
  if(!input.success)return res.status(400).json({error:'Enter a GitHub username and a job description of at least 30 characters.'});
- res.json(await findProjectMatches(input.data.username,input.data.jd));
+ res.json(await findProjectMatches(input.data.username,input.data.jd,input.data.role));
 });
 app.post('/api/tailor',async(req,res)=>{
  const input=z.object({resume:z.string().min(30).max(40000),jd:z.string().min(30).max(20000),repos:z.array(repoSchema).max(10).default([]),projectsApproved:z.boolean().default(false),originalPath:z.string().max(200).optional()}).safeParse(req.body);

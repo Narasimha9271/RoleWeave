@@ -1,0 +1,35 @@
+import {chromium,expect} from '@playwright/test';
+import {createServer} from 'vite';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const server=await createServer({server:{host:'127.0.0.1',port:0,open:false},define:{'import.meta.env.VITE_SUPABASE_URL':JSON.stringify(''),'import.meta.env.VITE_SUPABASE_ANON_KEY':JSON.stringify('')}});
+let browser;
+try{
+ await server.listen();browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
+ const page=await browser.newPage({viewport:{width:1280,height:1000}});const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.route('**/api/config',route=>route.fulfill({json:{cloud:false,ai:false}}));
+ const matches=Array.from({length:4},(_,i)=>({name:'Project '+(i+1),description:'Accessible React dashboard with TypeScript.',language:'TypeScript',url:'https://github.com/fixture/project'+i,matched:['React','TypeScript'],domainMatches:[],roleSkills:[],reasons:['Frontend evidence: React, TypeScript','Job description: React'],readme:'React TypeScript dashboard'}));
+ const scans=[],rewrites=[];
+ await page.route('**/api/github/match',route=>{scans.push(route.request().postDataJSON());return route.fulfill({json:{username:'fixture',checked:89,readmesChecked:8,readmeCandidates:8,matches}})});
+ await page.route('**/api/tailor',route=>{rewrites.push(route.request().postDataJSON());return route.fulfill({json:{text:'A resume with approved projects.',changes:[],matched:[],gaps:[],suggestions:[],mode:'extractive'}})});
+ await page.goto('http://127.0.0.1:'+server.httpServer.address().port);
+ await page.getByRole('button',{name:'My resume',exact:true}).click();await page.getByRole('button',{name:'Try an example resume'}).click();
+ await page.getByRole('button',{name:'Resume studio',exact:true}).click();await page.getByRole('button',{name:'Use example',exact:true}).click();
+ await page.getByRole('button',{name:'Connect & find matching projects'}).click();
+ await page.getByRole('dialog').getByLabel('GitHub username').fill('fixture');await page.getByRole('button',{name:'Connect & check projects'}).click();
+ await expect(page.getByRole('heading',{name:'Your top project matches'})).toBeVisible();
+ await expect(page.locator('.project-match')).toHaveCount(4);assert.equal(scans[0].role,'Frontend Engineer');assert.ok(scans[0].jd.includes('React'));
+ assert.equal(rewrites.length,0);assert.equal(await page.locator('.project-match input:checked').count(),0);
+ await page.locator('.project-match input').nth(0).check();await page.locator('.project-match input').nth(2).check();
+ await expect(page.getByRole('button',{name:'Import 2 & rewrite'})).toBeDisabled();
+ await page.getByLabel('I worked on these projects and can explain my contribution.').check();
+ fs.mkdirSync('test-results',{recursive:true});await page.screenshot({path:'test-results/project-recommendations.png'});
+ await page.setViewportSize({width:390,height:844});await expect(page.getByRole('dialog')).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await page.getByRole('button',{name:'Import 2 & rewrite'}).click();await expect(page.getByRole('textbox',{name:'Tailored resume'})).toBeVisible();
+ assert.equal(rewrites.length,1);assert.deepEqual(rewrites[0].repos.map(r=>r.name),['Project 1','Project 3']);assert.equal(rewrites[0].projectsApproved,true);
+ await page.getByLabel('Role title').fill('Backend Engineer');
+ await page.getByRole('button',{name:'Find matching projects',exact:true}).click();await expect(page.locator('.project-match')).toHaveCount(4);
+ assert.equal(scans.length,2);assert.equal(scans[1].role,'Backend Engineer');assert.equal(await page.locator('.project-match input:checked').count(),0);
+ await page.getByRole('button',{name:'Cancel project review'}).click();assert.equal(rewrites.length,1);
+ assert.deepEqual(errors,[]);console.log('PASS: connect auto-scan, top four suggestions, role/JD payload, no default selections, contribution consent, selected-only rewrite, changed-role rescan, cancel and mobile layout.');
+}finally{await browser?.close();await server.close();}

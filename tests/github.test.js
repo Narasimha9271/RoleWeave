@@ -22,3 +22,28 @@ test('candidate scan is bounded, handles absent READMEs, and excludes forks/priv
 });
 
 test('core JD requirements rank above optional technologies',()=>{const jd='Build React and TypeScript dashboards. Next.js and Docker are a plus.';const core=matchRepo({name:'ui',description:'React TypeScript'},jd);const bonus=matchRepo({name:'api',description:'Next.js Docker'},jd);assert.ok(core.score>bonus.score)});
+
+
+test('role title changes relevance and recommendations explain actual evidence',()=>{
+ const ui={name:'ui',description:'Accessible React and CSS dashboard',language:'JavaScript'};
+ const api={name:'service',description:'Python FastAPI REST service',language:'Python'};
+ const jd='Build reliable products and work with a software team.';
+ assert.ok(matchRepo(ui,jd,'Frontend Engineer').score>matchRepo(api,jd,'Frontend Engineer').score);
+ assert.ok(matchRepo(api,jd,'Backend Engineer').score>matchRepo(ui,jd,'Backend Engineer').score);
+ assert.ok(matchRepo(ui,jd,'Frontend Engineer').reasons.some(reason=>reason.includes('React')));
+ assert.equal(matchRepo({name:'notes',description:'Meeting notes'},jd,'Frontend Engineer').score,0);
+});
+
+test('recommendations return four ranked matches after reading candidate READMEs, with no unrelated padding',async()=>{
+ const original=globalThis.fetch;
+ globalThis.fetch=async url=>{
+  if(url.includes('/users/'))return Response.json(Array.from({length:6},(_,i)=>({name:'project'+i,description:i<5?'React dashboard':'Unrelated poetry',language:i<5?'JavaScript':'',owner:{login:'topfourfixture'},topics:[]})));
+  if(url.includes('/project4/'))return Response.json({encoding:'base64',content:Buffer.from('React TypeScript CSS accessibility').toString('base64')});
+  return Response.json({message:'Not found'},{status:404});
+ };
+ try{
+  const found=await findProjectMatches('topfourfixture','Build React and TypeScript web applications with CSS.','Frontend Engineer');
+  assert.equal(found.matches.length,4);assert.equal(found.matches[0].name,'project4');assert.ok(found.matches.every(r=>r.name!=='project5'&&r.reasons.length));
+  const unrelated=await findProjectMatches('topfourfixture','Build banking services using Java and Spring Boot.','Java Engineer');assert.equal(unrelated.matches.length,0);
+ }finally{globalThis.fetch=original;}
+});
