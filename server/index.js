@@ -93,6 +93,10 @@ app.post('/api/pdf/export',async(req,res)=>{
 app.use(express.static(path.resolve('dist')));
 app.get('/{*splat}',(req,res)=>res.sendFile(path.resolve('dist/index.html')));
 app.use((err,req,res,next)=>{
+ if(err.githubStatus){
+  if(err.retryAt)res.set('Retry-After',String(Math.max(1,Math.ceil((err.retryAt-Date.now())/1000))));
+  return res.status(err.httpStatus||502).json({error:err.message,code:err.code,...(err.retryAt?{retryAt:err.retryAt}:{})});
+ }
  console.error(err.name,err.status||'',err.code||'');
  let status=500,message='Could not complete this request. Please try again.';
  if(err instanceof multer.MulterError){status=400;message='File too large. Maximum size is 5 MB.';}

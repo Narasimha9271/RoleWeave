@@ -109,3 +109,8 @@ The included Dockerfile packages the Node API, React build and Python PDF engine
 5. Verify /healthz returns 200, /api/config reports cloud and AI enabled, and /api/tailor returns 401 without a session. Sign in through GitHub, save a test application, and confirm it reloads after signing out and back in.
 
 Supabase stores history and uploaded original PDFs; no persistent Render disk is required. The free web service can sleep when idle, so the first request may be slow. Changing VITE variables requires a rebuild. This configuration is for a single-service MVP; the public-launch limitations above still apply.
+
+## GitHub import reliability
+Set GITHUB_TOKEN in the server environment (Render > Environment) to a dedicated fine-grained GitHub token limited to public repositories, with no account or write permissions. Never use a VITE variable or commit the token. This avoids sharing the host IP's unauthenticated GitHub quota; authenticated quotas still apply. Renew the token before its chosen expiry.
+
+Public repository and README responses are cached for 15 minutes in bounded process memory. Identical concurrent requests share one upstream call; missing resources are cached for five minutes. Rate-limit responses stop further upstream requests until GitHub's retry/reset time (at least one minute). Import errors remain visible with a way to continue the application without projects. Authentication/permission failures are distinguished from quota failures. Cache contents are lost on restart.

@@ -12,12 +12,50 @@ export function matchRepo(repo,jd){
  const relevant=matched.some(s=>s!=='Git')||domainMatches.length>0;
  return {...repo,matched,domainMatches,score:relevant?matched.reduce((n,s)=>n+(s==='Git'||optional(s)?1:3),0)+domainMatches.length*2:0};
 }
-const cache=new Map();
+const cache=new Map(),inFlight=new Map();
+let blockedUntil=0;
+function githubError(message,githubStatus,httpStatus=502,code='GITHUB_UNAVAILABLE',retryAt=null){
+ const error=new Error(message);Object.assign(error,{githubStatus,httpStatus,code,retryAt});return error;
+}
+function limitError(){
+ const minutes=Math.max(1,Math.ceil((blockedUntil-Date.now())/60000));
+ return githubError('GitHub request limit reached. Try again in '+minutes+' minute'+(minutes===1?'':'s')+', or continue without projects.',429,429,'GITHUB_RATE_LIMIT',blockedUntil);
+}
+function remember(endpoint,value,ttl){
+ if(cache.size>=150)cache.delete(cache.keys().next().value);
+ cache.set(endpoint,{...value,until:Date.now()+ttl});
+}
 async function githubJson(endpoint){
- const cached=cache.get(endpoint);if(cached&&cached.until>Date.now())return cached.data;
- const response=await fetch('https://api.github.com'+endpoint,{headers:{Accept:'application/vnd.github+json','User-Agent':'RoleWeave'},signal:AbortSignal.timeout(12000)});
- if(!response.ok){const error=new Error(response.status===404?'GitHub account or repository not found.':response.status===403||response.status===429?'GitHub rate limit reached. Try again later or continue without projects.':'GitHub is unavailable. Retry or continue without projects.');error.githubStatus=response.status;throw error;}
- const data=await response.json();if(cache.size>=150)cache.delete(cache.keys().next().value);cache.set(endpoint,{data,until:Date.now()+300000});return data;
+ const cached=cache.get(endpoint);
+ if(cached&&cached.until>Date.now()){if(cached.error)throw cached.error;return cached.data;}
+ if(Date.now()<blockedUntil)throw limitError();
+ if(inFlight.has(endpoint))return inFlight.get(endpoint);
+ const pending=(async()=>{
+  const headers={Accept:'application/vnd.github+json','User-Agent':'RoleWeave','X-GitHub-Api-Version':'2022-11-28'};
+  const token=process.env.GITHUB_TOKEN?.trim();
+  if(token)headers.Authorization='Bearer '+token;
+  let response;
+  try{response=await fetch('https://api.github.com'+endpoint,{headers,redirect:'error',signal:AbortSignal.timeout(12000)});}
+  catch{throw githubError('GitHub is unavailable. Retry or continue without projects.',503);}
+  if(!response.ok){
+   const header=name=>response.headers?.get(name);
+   let detail={};try{detail=await response.json();}catch{}
+   const limited=response.status===429||(response.status===403&&(header('x-ratelimit-remaining')==='0'||header('retry-after')||/rate limit|abuse/i.test(detail.message||'')));
+   if(limited){
+    const retry=Number(header('retry-after'))*1000;
+    const reset=header('x-ratelimit-remaining')==='0'?Number(header('x-ratelimit-reset'))*1000:0;
+    blockedUntil=Math.max(Date.now()+60000,Date.now()+(Number.isFinite(retry)?retry:0),Number.isFinite(reset)?reset:0);
+    throw limitError();
+   }
+   if(response.status===404){const error=githubError('GitHub account or repository not found.',404,404,'GITHUB_NOT_FOUND');remember(endpoint,{error},300000);throw error;}
+   if(response.status===401)throw githubError('GitHub imports need an administrator to update the server connection. You can continue without projects.',401,503,'GITHUB_AUTH_CONFIGURATION');
+   if(response.status===403)throw githubError('GitHub denied access to this public resource. Try another account or continue without projects.',403,403,'GITHUB_ACCESS_DENIED');
+   throw githubError('GitHub is unavailable. Retry or continue without projects.',response.status);
+  }
+  const data=await response.json();remember(endpoint,{data},900000);return data;
+ })();
+ inFlight.set(endpoint,pending);
+ try{return await pending;}finally{inFlight.delete(endpoint);}
 }
 export async function listRepositories(username){
  if(!/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(username))throw new Error('Enter a valid GitHub username.');

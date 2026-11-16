@@ -61,6 +61,15 @@ try{
  await page.getByRole('button',{name:'Back to application',exact:true}).click();
  await expect(page.getByLabel('Company name')).toHaveValue(details.company);
  await expect(page.getByRole('textbox',{name:'Job description',exact:true})).toHaveValue(details.jd);
+ // A GitHub quota error stays visible and offers a return to the current application.
+ await page.route('**/api/github/fixture',route=>route.fulfill({status:429,json:{error:'GitHub request limit reached. Try again in 2 minutes, or continue without projects.',code:'GITHUB_RATE_LIMIT'}}));
+ await page.getByRole('button',{name:'GitHub projects',exact:true}).click();
+ await page.getByLabel('GitHub username').fill('fixture');
+ await page.getByRole('button',{name:'Connect & browse repositories'}).click();
+ await expect(page.getByRole('alert')).toContainText('Try again in 2 minutes');
+ await page.getByRole('button',{name:'Continue application without projects'}).click();
+ await expect(page.getByLabel('Company name')).toHaveValue(details.company);
+ await expect(page.getByRole('textbox',{name:'Job description',exact:true})).toHaveValue(details.jd);
  assert.deepEqual(errors,[]);
- console.log('PASS: upload, failed-save retention, successful-save return, application fields preserved, standalone save and back navigation.');
+ console.log('PASS: upload, failed-save retention, successful-save return, application fields preserved, standalone save, back navigation and GitHub quota recovery.');
 }finally{await browser?.close();await server.close();}
